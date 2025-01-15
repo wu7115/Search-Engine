@@ -3,12 +3,26 @@ import pickle
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import networkx as nx
+import json
+import numpy as np
+from PIL import Image
+from feature_extractor import FeatureExtractor
+from datetime import datetime
+from pathlib import Path
 
 app = Flask(__name__, template_folder='./static/')
 
 @app.route("/")
 def websearch():
     return render_template("websearch.html")
+
+@app.route("/imagesearch")
+def imagesearch():
+    return render_template("imagesearch.html")
+
+@app.route("/reverseimagesearch")
+def reverseimagesearch():
+    return render_template("reverseimagesearch.html")
 
 @app.route("/a")
 def a():
@@ -66,6 +80,61 @@ def web_search():
 
         top_results = [x[0] for x in ranked_results if x[1] >= 0.14] # 0.14 is a value that works for 5 webpages
         return render_template('results.html', data=[top_results, query])
+
+@app.route("/search_images", methods=['GET', 'POST'])
+def search_images():
+    if request.method == 'POST':
+        query = request.form['query'].lower()
+
+        if query == "":
+            return render_template("imagesearch.html")
+        
+        with open('images.json', 'r') as f:
+            images = json.load(f)
+
+        # Search for images with alt text and title that contain the query term
+        results = []
+        for img in images:
+            if query in img['alt_text'] or query in img['title']:
+                results.append(img)
+            else:
+                continue
+        
+        if len(results) == 0:
+            return render_template('notfound.html')
+        
+        return render_template('imageresults.html', data=[results, query])
+    
+fe = FeatureExtractor()
+features = []
+img_paths = []
+for feature_path in Path('./static/feature').glob("*.npy"):
+    features.append(np.load(feature_path))
+    img_paths.append(Path('./static/reverse_img_store')/(feature_path.stem + '.jpeg'))
+
+features = np.array(features)
+
+@app.route("/reverseimagesearchresult", methods=["POST", "GET"])
+def reverseimagesearchresult():
+    if request.method == 'POST':
+        file = request.files['query_img']
+    
+        # save the query image in uploaded folder
+        img = Image.open(file.stream) # PIL image
+        uploaded_img_path = './static/uploaded/' + datetime.now().isoformat().replace(":", ".") + "_" + file.filename
+        img.save(uploaded_img_path)
+
+        # run the search
+        query = fe.extract(img)
+        dists = np.linalg.norm(features - query, axis = 1)
+        ids = np.argsort(dists)[:3]
+        scores = [(dists[id], img_paths[id]) for id in ids]
+
+        return render_template('reverseimagesearch.html', query_path=uploaded_img_path, scores=scores)
+    
+    else:
+        return render_template("reverseimagesearch.html")
+
 
 def load_tokenized_text(filename):
     tokenized_text = pickle.load(open(filename, 'rb'))
